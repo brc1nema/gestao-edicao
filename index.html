@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gestão de Edição · BRCINEMA</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<meta name="theme-color" content="#0F172A">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Edição BRC">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<style>
+  html,body{margin:0;height:100%;background:#F8FAFC;font-family:Inter,-apple-system,Segoe UI,Roboto,sans-serif;color:#0F172A}
+  .c{min-height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;padding:24px;box-sizing:border-box}
+  .m{font-size:13px;font-weight:700;letter-spacing:.12em;color:#64748B}
+  .t{font-size:22px;font-weight:700}
+  form{display:flex;gap:8px;width:100%;max-width:340px}
+  input{flex:1;font:inherit;font-size:16px;padding:10px 12px;border:1px solid #CBD5E1;border-radius:10px;background:#fff;min-width:0}
+  button{font:inherit;font-size:15px;font-weight:600;padding:10px 16px;border:0;border-radius:10px;background:#4F46E5;color:#fff}
+  .e{color:#B91C1C;font-size:14px;min-height:18px}
+  .sp{width:28px;height:28px;border:3px solid #E2E8F0;border-top-color:#4F46E5;border-radius:50%;animation:g .8s linear infinite}
+  @keyframes g{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="c" id="tela"><div class="sp"></div></div>
+<script>
+// Endereço do Apps Script "Gestão de Edição" (o mesmo link do sistema)
+const API = 'https://script.google.com/macros/s/AKfycbyslB_PQGtL9QnFIZnXGkNfKO0A_986waJ4_3ZOky7pqjqGoOknW25qlB1ybV34lQcV/exec';
+const LS = { chave: 'ge_chave', pagina: 'ge_pagina', versao: 'ge_pagina_v' };
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
+
+async function chamar(chave, fn, args) {
+  const r = await fetch(API, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ k: chave, fn: fn, args: args || [] }) });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.erro);
+  return j.r;
+}
+
+// Roda dentro da página do sistema: faz o google.script.run funcionar fora do Google.
+function ponte(cfg) {
+  const LER_OFFLINE = { carregar: 1, versoes: 1, lerContratos: 1, listarAgendas: 1, lerAgenda: 1 };
+  let emCurso = 0, ultimoToque = 0;
+  const chave = () => { try { return localStorage.getItem(cfg.LS.chave); } catch (e) { return null; } };
+  function aviso(txt) {
+    let el = document.getElementById('app-offline');
+    if (!txt) { if (el) el.remove(); return; }
+    if (!el) { el = document.createElement('div'); el.id = 'app-offline'; el.style.cssText = 'position:fixed;left:50%;bottom:calc(12px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:99999;background:#334155;color:#fff;font:600 12px Inter,sans-serif;padding:7px 12px;border-radius:999px;box-shadow:0 4px 14px rgba(0,0,0,.2);white-space:nowrap'; (document.body || document.documentElement).appendChild(el); }
+    el.textContent = txt;
+  }
+  async function chamar(fn, args) {
+    const ck = 'ge_cache:' + fn + ':' + JSON.stringify(args);
+    emCurso++;
+    try {
+      let r;
+      try {
+        r = await fetch(cfg.API, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ k: chave(), fn: fn, args: args }) });
+      } catch (eRede) {
+        // Sem internet: leituras usam a última cópia guardada neste aparelho.
+        const c = LER_OFFLINE[fn] && (function () { try { return JSON.parse(localStorage.getItem(ck)); } catch (e) { return null; } })();
+        if (c) { aviso('Sem internet · dados de ' + new Date(c.em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })); return c.r; }
+        if (!document.getElementById('app-offline')) aviso('Sem internet');
+        throw eRede;
+      }
+      const j = await r.json();
+      if (!j.ok) {
+        if (j.erro === 'chave') { try { localStorage.removeItem(cfg.LS.chave); } catch (e) { } location.reload(); }
+        throw new Error(j.erro);
+      }
+      aviso('');
+      if (LER_OFFLINE[fn]) { try { localStorage.setItem(ck, JSON.stringify({ em: Date.now(), r: j.r })); } catch (e) { } }
+      return j.r;
+    } finally { emCurso--; }
+  }
+  function runner(ok, falha) {
+    return new Proxy({}, {
+      get(_, nome) {
+        if (nome === 'withSuccessHandler') return h => runner(h, falha);
+        if (nome === 'withFailureHandler') return h => runner(ok, h);
+        if (nome === 'withUserObject') return () => runner(ok, falha);
+        return (...args) => { chamar(nome, args).then(r => ok && ok(r), e => falha && falha(e)); };
+      }
+    });
+  }
+  window.google = { script: { run: runner(null, null) } };
+
+  // Versão nova da página no Drive: guarda e recarrega quando nada estiver sendo salvo ou digitado.
+  ['pointerdown', 'keydown'].forEach(ev => addEventListener(ev, () => { ultimoToque = Date.now(); }, true));
+  function livre() {
+    try {
+      if (emCurso) return false;
+      if (typeof gw !== 'undefined' && (gw.core.busy || gw.ponto.busy || gw.core.again || gw.ponto.again)) return false;
+      if (typeof ui !== 'undefined' && ui.modal) return false;
+      if (typeof isTyping === 'function' && isTyping()) return false;
+    } catch (e) { }
+    return Date.now() - ultimoToque > 4000;
+  }
+  let novaPronta = false, ultimaChecagem = 0;
+  async function checarVersao() {
+    ultimaChecagem = Date.now();
+    try {
+      const v = await chamar('__versao', []);
+      if (!v || v === localStorage.getItem(cfg.LS.versao)) return;
+      const p = await chamar('__pagina', []);
+      localStorage.setItem(cfg.LS.pagina, p.html);
+      localStorage.setItem(cfg.LS.versao, p.v);
+      novaPronta = true; tentarRecarregar();
+    } catch (e) { }
+  }
+  function tentarRecarregar() { if (!novaPronta) return; if (livre()) location.reload(); else setTimeout(tentarRecarregar, 3000); }
+  addEventListener('load', () => setTimeout(checarVersao, 1500));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - ultimaChecagem > 10 * 60000) setTimeout(checarVersao, 3000); });
+}
+
+function abrir(html) {
+  const cfg = JSON.stringify({ API: API, LS: LS });
+  const cab = '<link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="apple-touch-icon.png"><link rel="icon" href="icon-192.png">' +
+    '<meta name="theme-color" content="#0F172A"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">' +
+    '<meta name="apple-mobile-web-app-title" content="Edição BRC"><meta name="apple-mobile-web-app-status-bar-style" content="default">' +
+    '<script>(' + ponte.toString() + ')(' + cfg + ');<\/script>';
+  const i = html.search(/<head[^>]*>/i);
+  const final = i >= 0 ? html.replace(/<head[^>]*>/i, m => m + cab) : cab + html;
+  document.open(); document.write(final); document.close();
+}
+
+function pedirChave(erro) {
+  document.getElementById('tela').innerHTML =
+    '<div class="m">BRCINEMA</div><div class="t">Gestão de Edição</div>' +
+    '<form id="f"><input id="k" type="password" placeholder="Chave" autocomplete="current-password" autofocus><button>Entrar</button></form>' +
+    '<div class="e" id="e"></div>';
+  if (erro) document.getElementById('e').textContent = erro;
+  document.getElementById('f').onsubmit = async ev => {
+    ev.preventDefault();
+    const k = document.getElementById('k').value.trim();
+    if (!k) return;
+    document.getElementById('e').textContent = '';
+    try { await chamar(k, '__versao'); lsSet(LS.chave, k); iniciar(); }
+    catch (e) { document.getElementById('e').textContent = e.message === 'chave' ? 'Chave incorreta' : 'Sem conexão'; }
+  };
+}
+
+async function iniciar() {
+  const chave = lsGet(LS.chave);
+  if (!chave) return pedirChave();
+  const guardada = lsGet(LS.pagina);
+  if (guardada) return abrir(guardada);   // abre na hora; a página confere a versão sozinha
+  document.getElementById('tela').innerHTML = '<div class="sp"></div>';
+  try {
+    const p = await chamar(chave, '__pagina');
+    lsSet(LS.pagina, p.html); lsSet(LS.versao, p.v);
+    abrir(p.html);
+  } catch (e) {
+    if (e.message === 'chave') { try { localStorage.removeItem(LS.chave); } catch (x) { } return pedirChave('Chave incorreta'); }
+    document.getElementById('tela').innerHTML = '<div class="t">Sem conexão</div><button onclick="location.reload()">Tentar de novo</button>';
+  }
+}
+iniciar();
+</script>
+</body>
+</html>
