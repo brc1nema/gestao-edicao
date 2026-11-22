@@ -150,16 +150,22 @@ async function iniciar() {
   const chave = lsGet(LS.chave);
   if (!chave) return pedirChave();
   const guardada = lsGet(LS.pagina);
-  if (guardada) return abrir(guardada);   // abre na hora; a página confere a versão sozinha
+  if (guardada) return depoisDoCarregamento(() => abrir(guardada));   // abre na hora; a página confere a versão sozinha
   document.getElementById('tela').innerHTML = '<div class="sp"></div>';
   try {
     const p = await chamar(chave, '__pagina');
     lsSet(LS.pagina, p.html); lsSet(LS.versao, p.v);
-    abrir(p.html);
+    depoisDoCarregamento(() => abrir(p.html));
   } catch (e) {
     if (e.message === 'chave') { try { localStorage.removeItem(LS.chave); } catch (x) { } return pedirChave('Chave incorreta'); }
     document.getElementById('tela').innerHTML = '<div class="t">Sem conexão</div><button onclick="location.reload()">Tentar de novo</button>';
   }
+}
+// document.open só substitui a casca depois que ela terminou de carregar
+// (antes disso, o navegador ignora o open e mistura as duas páginas).
+function depoisDoCarregamento(fn) {
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(fn, 0), { once: true });
+  else setTimeout(fn, 0);
 }
 iniciar();
 </script>
